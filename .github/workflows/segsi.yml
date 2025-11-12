@@ -10,7 +10,7 @@ jobs:
         sudo apt-get update
         sudo apt-get install git curl bc bison flex build-essential python3 openjdk-8-jdk -y
         mkdir rom && cd rom
-        repo init -u https://github.com/NusantaraProject-ROM/android_manifest.git -b 10
+        repo init -u https://github.com/NusantaraProject-ROM/android_manifest.git -b 10-nad
         repo sync -j$(nproc)
         git clone https://github.com/phhusson/treble_experimentations.git phh
         cd phh && bash apply.sh && cd ..
