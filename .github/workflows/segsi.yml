@@ -27,7 +27,7 @@ jobs:
     
     steps:
     - name: Checkout Repository
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4
       
     - name: Setup Environment
       run: |
@@ -61,7 +61,7 @@ jobs:
         ls -lah
         
     - name: Upload GSI as Artifact
-      uses: actions/upload-artifact@v3
+      uses: actions/upload-artifact@v4
       with:
         name: ${{ github.event.inputs.ROM_NAME }}-GSI-${{ github.event.inputs.OUTPUT_TYPE }}
         path: ErfanGSI/output/*
