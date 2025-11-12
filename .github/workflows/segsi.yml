@@ -1,123 +1,80 @@
-name: ErfanGSI ROM Porter
+name: Build ErfanGSI 
 
 on:
   workflow_dispatch:
     inputs:
       ROM_URL:
-        description: 'URL Download ROM (Direct Link)'
+        description: 'Direct ROM/firmware URL (.zip) untuk dikonversi ke GSI'
         required: true
         type: string
       ROM_NAME:
-        description: 'Nama ROM (misal: MIUI, OneUI, ColorOS, dll)'
+        description: 'Nama ROM (contoh: MIUI, OxygenOS, OneUI, ColorOS, dsb)'
         required: true
         type: string
-      OUTPUT_TYPE:
-        description: 'Tipe Output GSI'
+      BUILD_TYPE:
+        description: 'Tipe partisi untuk output GSI'
         required: true
-        default: 'AB'
         type: choice
         options:
-          - AB
-          - Aonly
+          - ab
+          - aonly
           - all
+        default: ab
+      ANDROID_VERSION:
+        description: 'Versi Android target (hanya label)'
+        required: false
+        default: '2025'
 
 jobs:
   build:
     runs-on: ubuntu-latest
-    
+    permissions:
+      contents: write  # Diperlukan untuk membuat Release
+
     steps:
-    - name: Checkout Repository
-      uses: actions/checkout@v4
-      
-    - name: Setup Environment
-      run: |
-        sudo apt-get update
-        sudo apt-get install -y git wget unzip zip python3 python3-pip
-        
-    - name: Clone ErfanGSI
-      run: |
-        git clone --recurse-submodules https://github.com/erfanoabdi/ErfanGSI.git
-        cd ErfanGSI
-        sudo bash setup.sh
-        
-    - name: Download ROM
-      run: |
-        echo "Downloading ROM from: ${{ github.event.inputs.ROM_URL }}"
-        wget -O rom.zip "${{ github.event.inputs.ROM_URL }}"
-        
-    - name: Extract ROM Info
-      run: |
-        mkdir -p input
-        mv rom.zip input/
-        
-    - name: Build GSI
-      run: |
-        cd ErfanGSI
-        sudo bash url2GSI.sh "${{ github.event.inputs.ROM_URL }}" "${{ github.event.inputs.OUTPUT_TYPE }}"
-        
-    - name: Prepare Output
-      run: |
-        cd ErfanGSI/output
-        ls -lah
-        
-    - name: Upload GSI as Artifact
-      uses: actions/upload-artifact@v4
-      with:
-        name: ${{ github.event.inputs.ROM_NAME }}-GSI-${{ github.event.inputs.OUTPUT_TYPE }}
-        path: ErfanGSI/output/*
-        
-    - name: Get Output Info
-      id: output_info
-      run: |
-        echo "### Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "- **ROM Name:** ${{ github.event.inputs.ROM_NAME }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **ROM URL:** ${{ github.event.inputs.ROM_URL }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Output Type:** ${{ github.event.inputs.OUTPUT_TYPE }}" >> $GITHUB_STEP_SUMMARY
-        echo "- **Build Status:** ✅ Success" >> $GITHUB_STEP_SUMMARY
-        cd ErfanGSI/output
-        echo "### Output Files:" >> $GITHUB_STEP_SUMMARY
-        ls -lh >> $GITHUB_STEP_SUMMARY
-        
-    - name: Create Release Tag
-      id: create_tag
-      run: |
-        TAG_NAME="${{ github.event.inputs.ROM_NAME }}-GSI-$(date +%Y%m%d-%H%M%S)"
-        echo "tag_name=$TAG_NAME" >> $GITHUB_OUTPUT
-        echo "release_name=${{ github.event.inputs.ROM_NAME }} GSI ${{ github.event.inputs.OUTPUT_TYPE }} - $(date +%Y-%m-%d)" >> $GITHUB_OUTPUT
-        
-    - name: Create Release
-      id: create_release
-      uses: actions/create-release@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        tag_name: ${{ steps.create_tag.outputs.tag_name }}
-        release_name: ${{ steps.create_tag.outputs.release_name }}
-        body: |
-          ## 📱 ROM Information
-          - **ROM Name:** ${{ github.event.inputs.ROM_NAME }}
-          - **Output Type:** ${{ github.event.inputs.OUTPUT_TYPE }}
-          - **Build Date:** $(date +%Y-%m-%d\ %H:%M:%S)
-          - **Source URL:** ${{ github.event.inputs.ROM_URL }}
-          
-          ## 📥 Installation
-          1. Download the GSI file below
-          2. Boot to recovery (TWRP recommended)
-          3. Flash the GSI to system partition
-          4. Wipe data (recommended for first install)
-          5. Reboot and enjoy!
-          
-          ---
-          Built with [ErfanGSI](https://github.com/erfanoabdi/ErfanGSI)
-        draft: false
-        prerelease: false
-        
-    - name: Upload Release Assets
-      uses: actions/upload-release-asset@v1
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      with:
-        upload_url: ${{ steps.create_release.outputs.upload_url }}
-        asset_path: ErfanGSI/output/
-        asset_name: ${{ github.event.inputs.ROM_NAME }}-GSI-${{ github.event.inputs.OUTPUT_TYPE }}.zip
-        asset_content_type: application/zip
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Siapkan dependensi dasar
+        run: |
+          sudo apt update
+          sudo apt install -y git python3 python3-pip unzip zip wget curl
+
+      - name: Clone ErfanGSI tool (dengan submodules)
+        run: |
+          git clone --recurse-submodules https://github.com/erfanoabdi/ErfanGSIs.git
+          cd ErfanGSIs
+          ls -lah
+
+      - name: Jalankan build GSI
+        run: |
+          cd ErfanGSIs
+          chmod +x ./url2GSI.sh
+          ./url2GSI.sh "${{ github.event.inputs.ROM_URL }}" "${{ github.event.inputs.ROM_NAME }}"
+        env:
+          OUTPUT_TYPE: ${{ github.event.inputs.BUILD_TYPE }}
+
+      - name: Buat release baru
+        id: create_release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.ROM_NAME }}-${{ github.event.inputs.BUILD_TYPE }}-${{ github.event.inputs.ANDROID_VERSION }}
+          name: GSI ${{ github.event.inputs.ROM_NAME }} (${{ github.event.inputs.BUILD_TYPE }})
+          body: |
+            **ROM:** ${{ github.event.inputs.ROM_NAME }}
+            **Type:** ${{ github.event.inputs.BUILD_TYPE }}
+            **Android:** ${{ github.event.inputs.ANDROID_VERSION }}
+
+            🔧 Dibangun otomatis oleh GitHub Actions ErfanGSI 2025
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Upload hasil GSI ke release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event.inputs.ROM_NAME }}-${{ github.event.inputs.BUILD_TYPE }}-${{ github.event.inputs.ANDROID_VERSION }}
+          files: |
+            ErfanGSIs/output/*.img
+            ErfanGSIs/output/*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
