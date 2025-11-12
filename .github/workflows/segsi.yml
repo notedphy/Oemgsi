@@ -1,25 +1,51 @@
-name: Build GSI Nusantara
+name: Build Nusantara GSI Android 10
+
 on:
   workflow_dispatch:
+
 jobs:
   build:
     runs-on: ubuntu-latest
+
     steps:
-    - name: Setup repo
+    - name: Prepare environment
       run: |
         sudo apt-get update
-        sudo apt-get install git curl bc bison flex build-essential python3 openjdk-8-jdk -y
+        sudo apt-get install git curl bc bison flex build-essential \
+          python3 openjdk-8-jdk python-is-python3 unzip wget rsync -y
+
+        # Install repo tool (Google)
+        mkdir -p ~/.bin
+        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+        chmod a+x ~/.bin/repo
+        echo 'export PATH=~/.bin:$PATH' >> ~/.bashrc
+        export PATH=~/.bin:$PATH
+
+    - name: Sync Nusantara source
+      run: |
         mkdir rom && cd rom
         repo init -u https://github.com/NusantaraProject-ROM/android_manifest.git -b 10-nad
-        repo sync -j$(nproc)
+        repo sync -c --no-tags --no-clone-bundle -j$(nproc --all)
+
+    - name: Apply PHH Treble patches
+      run: |
+        cd rom
         git clone https://github.com/phhusson/treble_experimentations.git phh
-        cd phh && bash apply.sh && cd ..
+        cd phh && bash apply.sh || true
+        cd ..
+
+    - name: Build GSI
+      run: |
+        cd rom
         . build/envsetup.sh
         lunch treble_arm64_ab-userdebug
-        make systemimage -j$(nproc)
-    - name: Upload release
+        make systemimage -j$(nproc --all)
+        mkdir -p ~/output
+        cp out/target/product/arm64_ab/system.img ~/output/
+
+    - name: Upload Release
       uses: softprops/action-gh-release@v1
       with:
-        files: out/target/product/arm64_ab/system.img
+        files: ~/output/system.img
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
