@@ -1,0 +1,105 @@
+GitHub Actions workflow: Universal GSI Builder (ARM64 A/B)
+
+Maintainer: anothernop
+
+Nama file: .github/workflows/gsi-builder-ab.yml
+
+Deskripsi: Workflow otomatis untuk membangun GSI ARM64 (A/B) dari berbagai source ROM berbasis AOSP (Lineage, Pixel, AOSP Extended, dll)
+
+Catatan: Dapat digunakan untuk hampir semua manifest AOSP ROM yang memiliki target lunch arm64-ab.
+
+name: Universal GSI Builder ARM64 AB
+
+on: workflow_dispatch: inputs: repo_url: description: 'Repo manifest AOSP/Lineage/Custom ROM (contoh: https://github.com/LineageOS/android.git)' required: true default: '' repo_branch: description: 'Branch/Tag ROM (contoh: lineage-21.0 atau android-14.0.0_r35)' required: true default: 'master' build_variant: description: 'Build variant (user/userdebug/eng)' required: true default: 'userdebug' jdk_version: description: 'Versi JDK (11/17)' required: false default: '11' use_ccache: description: 'Gunakan ccache (true/false)' required: false default: 'true'
+
+jobs: build: runs-on: ubuntu-latest timeout-minutes: 420 env: TARGET_DEVICE: aosp_arm64_ab OUT_DIR: out/target/product/arm64_ab RELEASE_TAG: GSI-${{ github.run_number }}-arm64-ab MAINTAINER: anothernop
+
+steps:
+- name: Checkout workflow repo
+  uses: actions/checkout@v4
+
+- name: Install dependencies
+  run: |
+    sudo apt update
+    sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git-core gnupg gperf \
+    imagemagick lib32ncurses5-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev \
+    libxml2-utils lzop openjdk-${{ github.event.inputs.jdk_version }}-jdk python3 python3-pip rsync schedtool socat unzip wget zip zlib1g-dev
+
+- name: Setup Java
+  uses: actions/setup-java@v4
+  with:
+    distribution: temurin
+    java-version: ${{ github.event.inputs.jdk_version }}
+
+- name: Enable ccache (optional)
+  if: ${{ github.event.inputs.use_ccache == 'true' }}
+  run: |
+    mkdir -p $HOME/.ccache
+    echo 'max_size = 25.0G' > $HOME/.ccache/ccache.conf
+    export CCACHE_DIR=$HOME/.ccache
+    ccache -M 25G || true
+
+- name: Initialize manifest & sync ROM source
+  run: |
+    REPO_URL=${{ github.event.inputs.repo_url }}
+    REPO_BRANCH=${{ github.event.inputs.repo_branch }}
+    if [ -z "$REPO_URL" ]; then
+      REPO_URL=https://android.googlesource.com/platform/manifest
+    fi
+    mkdir -p android_build
+    cd android_build
+    sudo apt install -y repo || true
+    repo init -u "$REPO_URL" -b "$REPO_BRANCH" --depth=1 || repo init -u "$REPO_URL" -b "$REPO_BRANCH"
+    repo sync -c --no-tags --force-sync --optimized-fetch --prune -j$(nproc)
+
+- name: Setup environment and lunch target (ARM64 A/B)
+  run: |
+    cd android_build
+    source build/envsetup.sh
+    lunch aosp_arm64_ab-${{ github.event.inputs.build_variant }}
+  shell: bash
+
+- name: Build system image
+  run: |
+    cd android_build
+    make -j$(nproc) systemimage || (echo 'Build gagal, coba ulang -j2' && make -j2 systemimage)
+  shell: bash
+
+- name: Generate GSI image (sparse and gzip)
+  run: |
+    cd android_build
+    IMG=${OUT_DIR}/system.img
+    if [ ! -f "$IMG" ]; then
+      echo "system.img tidak ditemukan!"
+      exit 1
+    fi
+    gzip -c "$IMG" > "${IMG}.gz"
+
+    if command -v avbtool >/dev/null 2>&1; then
+      avbtool add_hash_footer --image "$IMG" --partition_name system --algorithm SHA256 || true
+    fi
+  shell: bash
+
+- name: Upload artifacts ke GitHub Release
+  uses: softprops/action-gh-release@v1
+  with:
+    tag_name: ${{ env.RELEASE_TAG }}
+    name: "Universal GSI ARM64 AB ${{ github.run_number }}"
+    body: |
+      🚀 **Universal GSI Build Completed**
+      - **Target:** ARM64 (A/B)
+      - **Source:** ${{ github.event.inputs.repo_url }}
+      - **Branch:** ${{ github.event.inputs.repo_branch }}
+      - **Variant:** ${{ github.event.inputs.build_variant }}
+      - **Maintainer:** ${{ env.MAINTAINER }}
+      - **Date:** ${{ github.event.head_commit.timestamp || github.run_started_at }}
+      - Compatible with all AOSP-based ROMs (Lineage, Pixel, crDroid, AOSP Extended, etc.)
+    files: |
+      android_build/${{ env.OUT_DIR }}/system.img
+      android_build/${{ env.OUT_DIR }}/system.img.gz
+      android_build/${{ env.OUT_DIR }}/vbmeta.img
+  env:
+    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+- name: Cleanup
+  run: echo '✅ GSI ARM64 A/B build selesai dan diunggah ke Release GitHub oleh maintainer anothernop.'
