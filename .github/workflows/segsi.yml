@@ -1,102 +1,25 @@
-name: Build ErfanGSI 
-
+name: Build GSI Nusantara
 on:
   workflow_dispatch:
-    inputs:
-      ROM_URL:
-        description: 'Link ROM (.zip) bisa dari SourceForge atau direct link OTA'
-        required: true
-        type: string
-      ROM_NAME:
-        description: 'Nama ROM (contoh: MIUI, OxygenOS, OneUI, ColorOS, dll)'
-        required: true
-        type: string
-      BUILD_TYPE:
-        description: 'Tipe partisi output GSI'
-        required: true
-        type: choice
-        options:
-          - ab
-          - aonly
-          - all
-        default: ab
-      ANDROID_VERSION:
-        description: 'Versi Android (hanya label)'
-        required: false
-        default: '2025'
-
 jobs:
   build:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-
     steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Install dependencies
-        run: |
-          sudo apt update
-          sudo apt install -y git python3 python3-pip unzip zip wget curl aria2
-
-      - name: Clone dan setup ErfanGSI tools
-        run: |
-          git clone --recurse-submodules https://github.com/erfanoabdi/ErfanGSIs.git
-          cd ErfanGSIs
-          chmod +x setup.sh
-          ./setup.sh
-
-      - name: Download ROM dari link
-        id: download_rom
-        run: |
-          mkdir -p rom
-          cd rom
-          ROM_URL="${{ github.event.inputs.ROM_URL }}"
-
-          echo "🔗 Downloading: $ROM_URL"
-
-          # Deteksi SourceForge dan gunakan aria2c agar bisa follow redirect
-          if echo "$ROM_URL" | grep -q "sourceforge.net"; then
-            echo "Detected SourceForge link, using aria2c..."
-            aria2c -x 16 -s 16 -k 1M -c -o rom.zip "$ROM_URL"
-          else
-            wget --content-disposition -O rom.zip --trust-server-names --no-check-certificate -c "$ROM_URL"
-          fi
-
-          ls -lh rom.zip
-          echo "ROM_PATH=$(pwd)/rom.zip" >> $GITHUB_ENV
-
-      - name: Build GSI
-        run: |
-          cd ErfanGSIs
-          chmod +x ./url2GSI.sh
-          ./url2GSI.sh "${{ env.ROM_PATH }}" "${{ github.event.inputs.ROM_NAME }}"
-        env:
-          OUTPUT_TYPE: ${{ github.event.inputs.BUILD_TYPE }}
-
-      - name: Buat release baru
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.ROM_NAME }}-${{ github.event.inputs.BUILD_TYPE }}-${{ github.event.inputs.ANDROID_VERSION }}
-          name: GSI ${{ github.event.inputs.ROM_NAME }} (${{ github.event.inputs.BUILD_TYPE }})
-          body: |
-            **ROM:** ${{ github.event.inputs.ROM_NAME }}
-            **Type:** ${{ github.event.inputs.BUILD_TYPE }}
-            **Android:** ${{ github.event.inputs.ANDROID_VERSION }}
-
-            🔧 Dibangun otomatis oleh GitHub Actions ErfanGSI 2025  
-            🌐 Support download dari SourceForge & direct link
-            📜 Auto setup dependencies dengan setup.sh
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Upload hasil GSI ke release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ github.event.inputs.ROM_NAME }}-${{ github.event.inputs.BUILD_TYPE }}-${{ github.event.inputs.ANDROID_VERSION }}
-          files: |
-            ErfanGSIs/output/*.img
-            ErfanGSIs/output/*.zip
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    - name: Setup repo
+      run: |
+        sudo apt-get update
+        sudo apt-get install git curl bc bison flex build-essential python3 openjdk-8-jdk -y
+        mkdir rom && cd rom
+        repo init -u https://github.com/NusantaraProject-ROM/android_manifest.git -b 10
+        repo sync -j$(nproc)
+        git clone https://github.com/phhusson/treble_experimentations.git phh
+        cd phh && bash apply.sh && cd ..
+        . build/envsetup.sh
+        lunch treble_arm64_ab-userdebug
+        make systemimage -j$(nproc)
+    - name: Upload release
+      uses: softprops/action-gh-release@v1
+      with:
+        files: out/target/product/arm64_ab/system.img
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
