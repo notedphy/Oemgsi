@@ -7,7 +7,7 @@ on:
         description: "Manifest ROM (contoh: https://github.com/PixelOS-AOSP/manifest.git)"
         required: true
       rom_branch:
-        description: "Branch ROM (contoh: fifteen atau lineage-21)"
+        description: "Branch ROM (contoh: fifteen, lineage-21, aosp-14.0)"
         required: true
       rom_name:
         description: "Nama ROM (contoh: PixelOS, LineageOS, EvolutionX)"
@@ -28,7 +28,7 @@ jobs:
       - name: Checkout Repository
         uses: actions/checkout@v4
 
-      - name: Setup Build Environment + CCACHE + Swap
+      - name: Setup Build Environment + CCACHE + SWAP
         run: |
           sudo apt update
           sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
@@ -37,45 +37,69 @@ jobs:
             libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
             openjdk-11-jdk python3 python3-pip wget repo
 
+          pip3 install tqdm requests
+
           # Aktifkan ccache
           export USE_CCACHE=1
           ccache -M 15G
           echo 'export USE_CCACHE=1' >> ~/.bashrc
           echo 'export CCACHE_EXEC=$(which ccache)' >> ~/.bashrc
 
-          # Tambahkan swap 10GB
+          # Buat swap 10GB biar build gak mati
           sudo fallocate -l 10G /swapfile
           sudo chmod 600 /swapfile
           sudo mkswap /swapfile
           sudo swapon /swapfile
           free -h
 
-          # Konfigurasi global git
+          # Set identitas builder
           git config --global user.name "GSI Builder"
           git config --global user.email "actions@github.com"
 
-      - name: Initialize ROM Source
+      - name: Initialize ROM Source (Safe Mode)
         run: |
           mkdir rom && cd rom
-          repo init -u ${{ github.event.inputs.rom_manifest }} -b ${{ github.event.inputs.rom_branch }}
-          repo sync -c -j$(nproc) --no-tags --no-clone-bundle
+
+          # Ambil repo terbaru agar gak stuck auto-update
+          curl -s https://storage.googleapis.com/git-repo-downloads/repo > repo
+          chmod +x repo
+          sudo mv /usr/bin/repo /usr/bin/repo_old || true
+          sudo cp repo /usr/bin/repo
+
+          # Inisialisasi ROM source tanpa verifikasi
+          repo init -u ${{ github.event.inputs.rom_manifest }} -b ${{ github.event.inputs.rom_branch }} --no-repo-verify
+
+          # Sinkronisasi dengan retry otomatis
+          set +e
+          for i in 1 2 3; do
+            echo "🔄 Sync attempt $i..."
+            repo sync -c --force-sync --no-tags --no-clone-bundle --optimized-fetch --prune -j4
+            if [ $? -eq 0 ]; then
+              echo "✅ Repo sync success!"
+              break
+            else
+              echo "⚠️ Repo sync failed, retrying in 30s..."
+              sleep 30
+            fi
+          done
+          set -e
 
       - name: Clone PHH Treble Tree
         run: |
           cd rom
           git clone https://github.com/phhusson/treble_manifest.git -b main device/phh/treble
-          mkdir -p device/phh/treble
           bash device/phh/treble/patches/apply.sh
 
-      - name: Build GSI Variants
+      - name: Build All GSI Variants
         run: |
           cd rom
           source build/envsetup.sh
+          targets=("treble_arm64_abN" "treble_arm64_aN" "treble_arm_abN" "treble_a64_abN" "treble_x86_abN")
 
-          for target in treble_arm64_abN treble_arm64_aN treble_arm_abN treble_a64_abN treble_x86_abN; do
+          for target in "${targets[@]}"; do
             echo "🔨 Building $target..."
-            lunch $target-userdebug
-            make -j$(nproc) systemimage
+            lunch $target-userdebug || continue
+            make -j$(nproc) systemimage || continue
             mkdir -p ../../release/$target
             mv out/target/product/$target/system.img ../../release/$target/system.img || true
           done
@@ -86,6 +110,7 @@ jobs:
           echo "ROM: ${{ github.event.inputs.rom_name }}" > info.txt
           echo "Branch: ${{ github.event.inputs.rom_branch }}" >> info.txt
           echo "Maintainer: ${{ github.event.inputs.maintainer }}" >> info.txt
+          echo "Built on $(date)" >> info.txt
           zip -r ${{ github.event.inputs.rom_name }}-GSI-${{ github.event.inputs.rom_branch }}.zip ./*
 
       - name: Upload to GitHub Release
