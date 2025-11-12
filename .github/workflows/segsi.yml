@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       ROM_URL:
-        description: 'Direct ROM/firmware URL (.zip) untuk dikonversi ke GSI'
+        description: 'Link ROM (.zip) bisa dari SourceForge, Mega.nz (dengan mirror), atau direct link'
         required: true
         type: string
       ROM_NAME:
@@ -21,7 +21,7 @@ on:
           - all
         default: ab
       ANDROID_VERSION:
-        description: 'Versi Android target (hanya label)'
+        description: 'Versi Android (hanya label)'
         required: false
         default: '2025'
 
@@ -29,33 +29,51 @@ jobs:
   build:
     runs-on: ubuntu-latest
     permissions:
-      contents: write  # Diperlukan untuk membuat Release
+      contents: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Siapkan dependensi dasar
+      - name: Install dependencies
         run: |
           sudo apt update
-          sudo apt install -y git python3 python3-pip unzip zip wget curl
+          sudo apt install -y git python3 python3-pip unzip zip wget curl aria2
 
-      - name: Clone ErfanGSI tool (dengan submodules)
+      - name: Clone ErfanGSI tools
         run: |
           git clone --recurse-submodules https://github.com/erfanoabdi/ErfanGSIs.git
-          cd ErfanGSIs
-          ls -lah
 
-      - name: Jalankan build GSI
+      - name: Download ROM dari link
+        id: download_rom
+        run: |
+          mkdir -p rom
+          cd rom
+          ROM_URL="${{ github.event.inputs.ROM_URL }}"
+
+          echo "🔗 Downloading: $ROM_URL"
+
+          # Jika SourceForge, gunakan aria2c agar follow redirect otomatis
+          if echo "$ROM_URL" | grep -q "sourceforge.net"; then
+            echo "Detected SourceForge link, using aria2c..."
+            aria2c -x 16 -s 16 -k 1M -c -o rom.zip "$ROM_URL"
+          else
+            # Default: wget biasa dengan follow-redirect
+            wget --content-disposition -O rom.zip --trust-server-names --no-check-certificate -c "$ROM_URL"
+          fi
+
+          ls -lh rom.zip
+          echo "ROM_PATH=$(pwd)/rom.zip" >> $GITHUB_ENV
+
+      - name: Build GSI
         run: |
           cd ErfanGSIs
           chmod +x ./url2GSI.sh
-          ./url2GSI.sh "${{ github.event.inputs.ROM_URL }}" "${{ github.event.inputs.ROM_NAME }}"
+          ./url2GSI.sh "${{ env.ROM_PATH }}" "${{ github.event.inputs.ROM_NAME }}"
         env:
           OUTPUT_TYPE: ${{ github.event.inputs.BUILD_TYPE }}
 
-      - name: Buat release baru
-        id: create_release
+      - name: Create release
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.ROM_NAME }}-${{ github.event.inputs.BUILD_TYPE }}-${{ github.event.inputs.ANDROID_VERSION }}
@@ -65,7 +83,8 @@ jobs:
             **Type:** ${{ github.event.inputs.BUILD_TYPE }}
             **Android:** ${{ github.event.inputs.ANDROID_VERSION }}
 
-            🔧 Dibangun otomatis oleh GitHub Actions ErfanGSI 2025
+            🔧 Dibangun otomatis oleh GitHub Actions ErfanGSI 2025  
+            🌐 Support download dari SourceForge & direct link.
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
