@@ -1,105 +1,105 @@
-GitHub Actions workflow: Universal GSI Builder (ARM64 A/B)
+name: Universal AOSP GSI Builder
 
-Maintainer: anothernop
+on:
+  workflow_dispatch:
+    inputs:
+      rom_manifest:
+        description: "Manifest ROM (contoh: https://github.com/PixelOS-AOSP/manifest.git)"
+        required: true
+      rom_branch:
+        description: "Branch ROM (contoh: fifteen atau lineage-21)"
+        required: true
+      rom_name:
+        description: "Nama ROM (contoh: PixelOS, LineageOS, EvolutionX)"
+        required: true
+      maintainer:
+        description: "Nama Maintainer"
+        required: false
+        default: "anothernop"
 
-Nama file: .github/workflows/gsi-builder-ab.yml
+jobs:
+  build:
+    name: Build Universal AOSP GSI
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
 
-Deskripsi: Workflow otomatis untuk membangun GSI ARM64 (A/B) dari berbagai source ROM berbasis AOSP (Lineage, Pixel, AOSP Extended, dll)
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
 
-Catatan: Dapat digunakan untuk hampir semua manifest AOSP ROM yang memiliki target lunch arm64-ab.
+      - name: Setup Build Environment + CCACHE + Swap
+        run: |
+          sudo apt update
+          sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib \
+            git gnupg gperf imagemagick lib32ncurses5-dev lib32readline-dev lib32z1-dev \
+            liblz4-tool libncurses5 libncurses5-dev libsdl1.2-dev libssl-dev libxml2 \
+            libxml2-utils lzop pngcrush rsync schedtool squashfs-tools xsltproc zip zlib1g-dev \
+            openjdk-11-jdk python3 python3-pip wget repo
 
-name: Universal GSI Builder ARM64 AB
+          # Aktifkan ccache
+          export USE_CCACHE=1
+          ccache -M 15G
+          echo 'export USE_CCACHE=1' >> ~/.bashrc
+          echo 'export CCACHE_EXEC=$(which ccache)' >> ~/.bashrc
 
-on: workflow_dispatch: inputs: repo_url: description: 'Repo manifest AOSP/Lineage/Custom ROM (contoh: https://github.com/LineageOS/android.git)' required: true default: '' repo_branch: description: 'Branch/Tag ROM (contoh: lineage-21.0 atau android-14.0.0_r35)' required: true default: 'master' build_variant: description: 'Build variant (user/userdebug/eng)' required: true default: 'userdebug' jdk_version: description: 'Versi JDK (11/17)' required: false default: '11' use_ccache: description: 'Gunakan ccache (true/false)' required: false default: 'true'
+          # Tambahkan swap 10GB
+          sudo fallocate -l 10G /swapfile
+          sudo chmod 600 /swapfile
+          sudo mkswap /swapfile
+          sudo swapon /swapfile
+          free -h
 
-jobs: build: runs-on: ubuntu-latest timeout-minutes: 420 env: TARGET_DEVICE: aosp_arm64_ab OUT_DIR: out/target/product/arm64_ab RELEASE_TAG: GSI-${{ github.run_number }}-arm64-ab MAINTAINER: anothernop
+          # Konfigurasi global git
+          git config --global user.name "GSI Builder"
+          git config --global user.email "actions@github.com"
 
-steps:
-- name: Checkout workflow repo
-  uses: actions/checkout@v4
+      - name: Initialize ROM Source
+        run: |
+          mkdir rom && cd rom
+          repo init -u ${{ github.event.inputs.rom_manifest }} -b ${{ github.event.inputs.rom_branch }}
+          repo sync -c -j$(nproc) --no-tags --no-clone-bundle
 
-- name: Install dependencies
-  run: |
-    sudo apt update
-    sudo apt install -y bc bison build-essential ccache curl flex g++-multilib gcc-multilib git-core gnupg gperf \
-    imagemagick lib32ncurses5-dev lib32z1-dev liblz4-tool libncurses5-dev libsdl1.2-dev libssl-dev \
-    libxml2-utils lzop openjdk-${{ github.event.inputs.jdk_version }}-jdk python3 python3-pip rsync schedtool socat unzip wget zip zlib1g-dev
+      - name: Clone PHH Treble Tree
+        run: |
+          cd rom
+          git clone https://github.com/phhusson/treble_manifest.git -b main device/phh/treble
+          mkdir -p device/phh/treble
+          bash device/phh/treble/patches/apply.sh
 
-- name: Setup Java
-  uses: actions/setup-java@v4
-  with:
-    distribution: temurin
-    java-version: ${{ github.event.inputs.jdk_version }}
+      - name: Build GSI Variants
+        run: |
+          cd rom
+          source build/envsetup.sh
 
-- name: Enable ccache (optional)
-  if: ${{ github.event.inputs.use_ccache == 'true' }}
-  run: |
-    mkdir -p $HOME/.ccache
-    echo 'max_size = 25.0G' > $HOME/.ccache/ccache.conf
-    export CCACHE_DIR=$HOME/.ccache
-    ccache -M 25G || true
+          for target in treble_arm64_abN treble_arm64_aN treble_arm_abN treble_a64_abN treble_x86_abN; do
+            echo "🔨 Building $target..."
+            lunch $target-userdebug
+            make -j$(nproc) systemimage
+            mkdir -p ../../release/$target
+            mv out/target/product/$target/system.img ../../release/$target/system.img || true
+          done
 
-- name: Initialize manifest & sync ROM source
-  run: |
-    REPO_URL=${{ github.event.inputs.repo_url }}
-    REPO_BRANCH=${{ github.event.inputs.repo_branch }}
-    if [ -z "$REPO_URL" ]; then
-      REPO_URL=https://android.googlesource.com/platform/manifest
-    fi
-    mkdir -p android_build
-    cd android_build
-    sudo apt install -y repo || true
-    repo init -u "$REPO_URL" -b "$REPO_BRANCH" --depth=1 || repo init -u "$REPO_URL" -b "$REPO_BRANCH"
-    repo sync -c --no-tags --force-sync --optimized-fetch --prune -j$(nproc)
+      - name: Package All Builds
+        run: |
+          cd release
+          echo "ROM: ${{ github.event.inputs.rom_name }}" > info.txt
+          echo "Branch: ${{ github.event.inputs.rom_branch }}" >> info.txt
+          echo "Maintainer: ${{ github.event.inputs.maintainer }}" >> info.txt
+          zip -r ${{ github.event.inputs.rom_name }}-GSI-${{ github.event.inputs.rom_branch }}.zip ./*
 
-- name: Setup environment and lunch target (ARM64 A/B)
-  run: |
-    cd android_build
-    source build/envsetup.sh
-    lunch aosp_arm64_ab-${{ github.event.inputs.build_variant }}
-  shell: bash
-
-- name: Build system image
-  run: |
-    cd android_build
-    make -j$(nproc) systemimage || (echo 'Build gagal, coba ulang -j2' && make -j2 systemimage)
-  shell: bash
-
-- name: Generate GSI image (sparse and gzip)
-  run: |
-    cd android_build
-    IMG=${OUT_DIR}/system.img
-    if [ ! -f "$IMG" ]; then
-      echo "system.img tidak ditemukan!"
-      exit 1
-    fi
-    gzip -c "$IMG" > "${IMG}.gz"
-
-    if command -v avbtool >/dev/null 2>&1; then
-      avbtool add_hash_footer --image "$IMG" --partition_name system --algorithm SHA256 || true
-    fi
-  shell: bash
-
-- name: Upload artifacts ke GitHub Release
-  uses: softprops/action-gh-release@v1
-  with:
-    tag_name: ${{ env.RELEASE_TAG }}
-    name: "Universal GSI ARM64 AB ${{ github.run_number }}"
-    body: |
-      🚀 **Universal GSI Build Completed**
-      - **Target:** ARM64 (A/B)
-      - **Source:** ${{ github.event.inputs.repo_url }}
-      - **Branch:** ${{ github.event.inputs.repo_branch }}
-      - **Variant:** ${{ github.event.inputs.build_variant }}
-      - **Maintainer:** ${{ env.MAINTAINER }}
-      - **Date:** ${{ github.event.head_commit.timestamp || github.run_started_at }}
-      - Compatible with all AOSP-based ROMs (Lineage, Pixel, crDroid, AOSP Extended, etc.)
-    files: |
-      android_build/${{ env.OUT_DIR }}/system.img
-      android_build/${{ env.OUT_DIR }}/system.img.gz
-      android_build/${{ env.OUT_DIR }}/vbmeta.img
-  env:
-    GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-- name: Cleanup
-  run: echo '✅ GSI ARM64 A/B build selesai dan diunggah ke Release GitHub oleh maintainer anothernop.'
+      - name: Upload to GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: release/${{ github.event.inputs.rom_name }}-GSI-${{ github.event.inputs.rom_branch }}.zip
+          tag_name: GSI-${{ github.event.inputs.rom_name }}-${{ github.run_number }}
+          name: "${{ github.event.inputs.rom_name }} GSI Build #${{ github.run_number }}"
+          body: |
+            ✅ **${{ github.event.inputs.rom_name }} GSI Build Complete**
+            - Maintainer: **${{ github.event.inputs.maintainer }}**
+            - Branch: **${{ github.event.inputs.rom_branch }}**
+            - Variants: ARM64-AB, ARM64-A, ARM-AB, A64-AB, X86-AB
+            - CCACHE: Enabled (15GB)
+            - SWAP: 10GB active
+            - Build #: ${{ github.run_number }}
+            - Built via GitHub Actions 🚀
