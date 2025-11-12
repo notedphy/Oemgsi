@@ -4,15 +4,15 @@ on:
   workflow_dispatch:
     inputs:
       ROM_URL:
-        description: 'Link ROM (.zip) bisa dari SourceForge, Mega.nz (dengan mirror), atau direct link'
+        description: 'Link ROM (.zip) bisa dari SourceForge atau direct link OTA'
         required: true
         type: string
       ROM_NAME:
-        description: 'Nama ROM (contoh: MIUI, OxygenOS, OneUI, ColorOS, dsb)'
+        description: 'Nama ROM (contoh: MIUI, OxygenOS, OneUI, ColorOS, dll)'
         required: true
         type: string
       BUILD_TYPE:
-        description: 'Tipe partisi untuk output GSI'
+        description: 'Tipe partisi output GSI'
         required: true
         type: choice
         options:
@@ -40,9 +40,12 @@ jobs:
           sudo apt update
           sudo apt install -y git python3 python3-pip unzip zip wget curl aria2
 
-      - name: Clone ErfanGSI tools
+      - name: Clone dan setup ErfanGSI tools
         run: |
           git clone --recurse-submodules https://github.com/erfanoabdi/ErfanGSIs.git
+          cd ErfanGSIs
+          chmod +x setup.sh
+          ./setup.sh
 
       - name: Download ROM dari link
         id: download_rom
@@ -53,12 +56,11 @@ jobs:
 
           echo "🔗 Downloading: $ROM_URL"
 
-          # Jika SourceForge, gunakan aria2c agar follow redirect otomatis
+          # Deteksi SourceForge dan gunakan aria2c agar bisa follow redirect
           if echo "$ROM_URL" | grep -q "sourceforge.net"; then
             echo "Detected SourceForge link, using aria2c..."
             aria2c -x 16 -s 16 -k 1M -c -o rom.zip "$ROM_URL"
           else
-            # Default: wget biasa dengan follow-redirect
             wget --content-disposition -O rom.zip --trust-server-names --no-check-certificate -c "$ROM_URL"
           fi
 
@@ -73,7 +75,7 @@ jobs:
         env:
           OUTPUT_TYPE: ${{ github.event.inputs.BUILD_TYPE }}
 
-      - name: Create release
+      - name: Buat release baru
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ github.event.inputs.ROM_NAME }}-${{ github.event.inputs.BUILD_TYPE }}-${{ github.event.inputs.ANDROID_VERSION }}
@@ -84,7 +86,8 @@ jobs:
             **Android:** ${{ github.event.inputs.ANDROID_VERSION }}
 
             🔧 Dibangun otomatis oleh GitHub Actions ErfanGSI 2025  
-            🌐 Support download dari SourceForge & direct link.
+            🌐 Support download dari SourceForge & direct link
+            📜 Auto setup dependencies dengan setup.sh
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
 
