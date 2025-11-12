@@ -1,4 +1,4 @@
-name: Build Nusantara GSI Android 10
+name: Build Nusantara GSI Android 10 (Lite)
 
 on:
   workflow_dispatch:
@@ -8,24 +8,33 @@ jobs:
     runs-on: ubuntu-latest
 
     steps:
-    - name: Prepare environment
+    - name: Prepare Environment
       run: |
         sudo apt-get update
-        sudo apt-get install git curl bc bison flex build-essential \
-          python3 openjdk-8-jdk python-is-python3 unzip wget rsync repo -y
+        sudo apt-get install -y git curl bc bison flex build-essential \
+          python3 python-is-python3 openjdk-8-jdk unzip rsync wget repo -y
 
-        # Install repo tool (Google)
+        # Install latest repo tool (bypass system repo)
+        sudo rm -f /usr/bin/repo || true
         mkdir -p ~/.bin
-        curl https://storage.googleapis.com/git-repo-downloads/repo > ~/.bin/repo
+        curl -o ~/.bin/repo https://storage.googleapis.com/git-repo-downloads/repo
         chmod a+x ~/.bin/repo
-        echo 'export PATH=~/.bin:$PATH' >> ~/.bashrc
-        export PATH=~/.bin:$PATH
+        echo 'export PATH=$HOME/.bin:$PATH' >> ~/.bashrc
+        export PATH=$HOME/.bin:$PATH
 
-    - name: Sync Nusantara source
+        # Setup global git identity
+        git config --global user.name "anothernop"
+        git config --global user.email "anothernop@users.noreply.github.com"
+
+    - name: Sync Minimal Treble Source
       run: |
         mkdir rom && cd rom
-        repo init -u https://github.com/NusantaraProject-ROM/android_manifest.git -b 10-nad
-        repo sync -c --no-tags --no-clone-bundle -j$(nproc --all)
+        repo init -u https://github.com/phhusson/treble_manifest.git -b android-10.0
+        repo sync -c --no-tags --no-clone-bundle --force-sync --depth=1 -j4
+
+        # Apply Nusantara layer
+        git clone https://github.com/NusantaraProject-ROM/frameworks_base.git frameworks/base
+        git clone https://github.com/NusantaraProject-ROM/packages_apps_Settings.git packages/apps/Settings
 
     - name: Apply PHH Treble patches
       run: |
@@ -34,18 +43,28 @@ jobs:
         cd phh && bash apply.sh || true
         cd ..
 
-    - name: Build GSI
+    - name: Build GSI (arm64-ab)
       run: |
         cd rom
         . build/envsetup.sh
         lunch treble_arm64_ab-userdebug
-        make systemimage -j$(nproc --all)
+        make systemimage -j$(nproc)
         mkdir -p ~/output
-        cp out/target/product/arm64_ab/system.img ~/output/
+        cp out/target/product/arm64_ab/system.img ~/output/system-arm64-ab.img
+
+    - name: Compress GSI
+      run: |
+        cd ~/output
+        xz -z system-arm64-ab.img
 
     - name: Upload Release
       uses: softprops/action-gh-release@v1
       with:
-        files: ~/output/system.img
+        files: ~/output/system-arm64-ab.img.xz
+        tag_name: nusantara-gsi-android10
+        name: "Nusantara GSI Android 10 (arm64-ab)"
+        body: |
+          ✅ Nusantara GSI Android 10 (Lite PHH base)
+          Maintainer: anothernop
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
